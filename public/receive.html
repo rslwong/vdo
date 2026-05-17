@@ -36,6 +36,9 @@
     #debug-title { display: flex; justify-content: space-between; margin-bottom: 0.5rem; }
     #debug-title span { font-size: 0.7rem; color: #555; text-transform: uppercase; letter-spacing: 0.05em; }
     input[type=range] { width: 100%; accent-color: #2563eb; cursor: pointer; }
+    #exit-fs-btn { display: none; position: absolute; top: 12px; right: 12px; background: rgba(0,0,0,0.6); color: #fff; border: none; border-radius: 6px; padding: 6px 12px; font-size: 0.85rem; font-weight: 600; cursor: pointer; z-index: 10; }
+    #video-wrap:fullscreen #exit-fs-btn,
+    #video-wrap:-webkit-full-screen #exit-fs-btn { display: block; }
   </style>
 </head>
 <body>
@@ -43,6 +46,7 @@
 
   <div id="video-wrap">
     <video id="remote-video" autoplay playsinline muted></video>
+    <button id="exit-fs-btn" onclick="exitFullscreen()">✕ Exit Fullscreen</button>
     <div id="play-overlay" onclick="forcePlay()">
       <span>▶</span>
       <p>Click to play</p>
@@ -268,6 +272,11 @@
       const wrap = document.getElementById('video-wrap');
       if (wrap.requestFullscreen) wrap.requestFullscreen();
       else if (wrap.webkitRequestFullscreen) wrap.webkitRequestFullscreen();
+    }
+
+    function exitFullscreen() {
+      if (document.exitFullscreen) document.exitFullscreen();
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
     }
 
     if (params.has('room')) {
