@@ -30,6 +30,9 @@
     #mute-btn { padding: 0.75rem 1.2rem; background: #222; color: #ccc; font-size: 1rem; font-weight: 700; border-radius: 8px; display: none; }
     #mute-btn:hover { background: #2a2a2a; }
     #mute-btn.muted { background: #7f1d1d; color: #fca5a5; }
+    #flip-btn { padding: 0.75rem 1.2rem; background: #222; color: #ccc; font-size: 1rem; font-weight: 700; border-radius: 8px; display: none; }
+    #flip-btn:hover { background: #2a2a2a; }
+    #flip-btn:disabled { opacity: 0.4; cursor: not-allowed; }
     #log { font-size: 0.75rem; color: #555; margin-top: 0.5rem; }
     input[type=range] { width: 100%; accent-color: #2563eb; cursor: pointer; }
   </style>
@@ -51,7 +54,7 @@
     <div class="card">
       <label>Room Code — share this with the receiver</label>
       <div class="room-row">
-        <input id="room-code" readonly />
+        <input id="room-code" maxlength="3" placeholder="123" oninput="updateShareLink()" />
         <button id="copy-btn" onclick="copyLink()">Copy Link</button>
       </div>
       <div id="share-link"></div>
@@ -65,6 +68,7 @@
     <div id="bottom-row">
       <button id="start-btn" onclick="start()">Start Camera &amp; Wait for Receiver</button>
       <button id="mute-btn" onclick="toggleMute()">🎙 Mute</button>
+      <button id="flip-btn" onclick="flipCamera()">🔄 Flip</button>
     </div>
   </div>
 
@@ -76,33 +80,42 @@
       { urls: 'stun:stun1.l.google.com:19302' }
     ];
 
-    const roomId = String(Math.floor(Math.random() * 900) + 100);
+    let roomId = localStorage.getItem('vdo-room-id') || String(Math.floor(Math.random() * 900) + 100);
     document.getElementById('room-code').value = roomId;
+    updateShareLink();
 
-    const receiveUrl = `${location.origin}/receive.html?room=${roomId}`;
-    document.getElementById('share-link').textContent = receiveUrl;
+    function updateShareLink() {
+      const code = document.getElementById('room-code').value.trim();
+      document.getElementById('share-link').textContent = code
+        ? `${location.origin}/receive.html?room=${code}`
+        : '';
+    }
 
     let ws, pc, localStream, canvasStream, rawVideoEl;
     let remoteDescSet = false;
     let pendingCandidates = [];
     let zoomLevel = 1;
+    let canvasActive = false;
+    let videoDevices = [];
+    let currentDeviceIndex = 0;
 
     const zoomCanvas = document.createElement('canvas');
     const zoomCtx = zoomCanvas.getContext('2d');
 
-    function setZoom(value) {
+    async function setZoom(value) {
       zoomLevel = parseFloat(value);
       document.getElementById('zoom-label').textContent = zoomLevel.toFixed(1) + '×';
+      if (zoomLevel === 1 && canvasActive) {
+        await disableCanvasPipeline();
+      } else if (zoomLevel !== 1 && !canvasActive) {
+        await enableCanvasPipeline();
+      }
     }
 
-    function startCanvasPipeline(rawStream) {
-      rawVideoEl = document.createElement('video');
-      rawVideoEl.srcObject = rawStream;
-      rawVideoEl.muted = true;
-      rawVideoEl.playsInline = true;
-      rawVideoEl.play();
-
+    async function enableCanvasPipeline() {
+      canvasActive = true;
       (function drawFrame() {
+        if (!canvasActive) return;
         if (rawVideoEl.readyState >= 2) {
           const vw = rawVideoEl.videoWidth;
           const vh = rawVideoEl.videoHeight;
@@ -118,10 +131,23 @@
         }
         requestAnimationFrame(drawFrame);
       })();
-
       canvasStream = zoomCanvas.captureStream(30);
-      rawStream.getAudioTracks().forEach(t => canvasStream.addTrack(t));
-      return canvasStream;
+      localStream.getAudioTracks().forEach(t => canvasStream.addTrack(t));
+      document.getElementById('local-video').srcObject = canvasStream;
+      if (pc) {
+        const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+        if (sender) await sender.replaceTrack(canvasStream.getVideoTracks()[0]);
+      }
+    }
+
+    async function disableCanvasPipeline() {
+      canvasActive = false;
+      canvasStream = null;
+      document.getElementById('local-video').srcObject = localStream;
+      if (pc) {
+        const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+        if (sender) await sender.replaceTrack(localStream.getVideoTracks()[0]);
+      }
     }
     const statusBadge = document.getElementById('status-badge');
     const logEl = document.getElementById('log');
@@ -145,7 +171,8 @@
       const devices = await navigator.mediaDevices.enumerateDevices();
       const sel = document.getElementById('camera-select');
       sel.innerHTML = '';
-      devices.filter(d => d.kind === 'videoinput').forEach((d, i) => {
+      videoDevices = devices.filter(d => d.kind === 'videoinput');
+      videoDevices.forEach((d, i) => {
         const opt = document.createElement('option');
         opt.value = d.deviceId;
         opt.textContent = d.label || `Camera ${i + 1}`;
@@ -154,18 +181,30 @@
     }
 
     async function start() {
+      roomId = document.getElementById('room-code').value.trim();
+      if (!roomId) { log('Enter a room code first'); return; }
+      localStorage.setItem('vdo-room-id', roomId);
       document.getElementById('start-btn').disabled = true;
       const deviceId = document.getElementById('camera-select').value;
+      currentDeviceIndex = videoDevices.findIndex(d => d.deviceId === deviceId);
+      if (currentDeviceIndex === -1) currentDeviceIndex = 0;
 
       try {
         localStream = await navigator.mediaDevices.getUserMedia({
           video: deviceId ? { deviceId: { exact: deviceId } } : true,
           audio: true
         });
-        const streamToSend = startCanvasPipeline(localStream);
-        document.getElementById('local-video').srcObject = streamToSend;
+        // Hidden video element feeds the canvas when zoom > 1
+        rawVideoEl = document.createElement('video');
+        rawVideoEl.srcObject = localStream;
+        rawVideoEl.muted = true;
+        rawVideoEl.playsInline = true;
+        rawVideoEl.play();
+        // Start with raw stream — no canvas overhead at 1×
+        document.getElementById('local-video').srcObject = localStream;
         document.getElementById('mute-btn').style.display = 'block';
         document.getElementById('zoom-card').style.display = 'block';
+        if (videoDevices.length > 1) document.getElementById('flip-btn').style.display = 'block';
       } catch (e) {
         log('Camera error: ' + e.message);
         document.getElementById('start-btn').disabled = false;
@@ -243,6 +282,33 @@
       log('Offer sent — waiting for answer…');
     }
 
+    async function flipCamera() {
+      if (!rawVideoEl || videoDevices.length < 2) return;
+      const btn = document.getElementById('flip-btn');
+      btn.disabled = true;
+      currentDeviceIndex = (currentDeviceIndex + 1) % videoDevices.length;
+      const deviceId = videoDevices[currentDeviceIndex].deviceId;
+      try {
+        const newStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+        localStream.getVideoTracks().forEach(t => t.stop());
+        localStream = new MediaStream([...newStream.getVideoTracks(), ...localStream.getAudioTracks()]);
+        rawVideoEl.srcObject = localStream;
+        await rawVideoEl.play();
+        if (!canvasActive) {
+          // Raw mode: update preview and PC track directly
+          document.getElementById('local-video').srcObject = localStream;
+          if (pc) {
+            const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+            if (sender) await sender.replaceTrack(localStream.getVideoTracks()[0]);
+          }
+        }
+        // Canvas mode: rawVideoEl already updated; canvas draws the new camera automatically
+      } catch (e) {
+        log('Camera flip failed: ' + e.message);
+      }
+      btn.disabled = false;
+    }
+
     function toggleMute() {
       const btn = document.getElementById('mute-btn');
       const audioTracks = localStream ? localStream.getAudioTracks() : [];
@@ -254,7 +320,8 @@
     }
 
     function copyLink() {
-      navigator.clipboard.writeText(receiveUrl).then(() => {
+      const url = `${location.origin}/receive.html?room=${roomId}`;
+      navigator.clipboard.writeText(url).then(() => {
         const btn = document.getElementById('copy-btn');
         btn.textContent = 'Copied!';
         setTimeout(() => btn.textContent = 'Copy Link', 2000);
