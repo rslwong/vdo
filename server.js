@@ -13,6 +13,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 // rooms: Map<roomId, Map<role, WebSocket>>
 const rooms = new Map();
 
+let serverIP = 'localhost';
+let HTTPS_PORT = 3443;
+
 function handleConnection(ws) {
   let currentRoom = null;
   let currentRole = null;
@@ -29,6 +32,11 @@ function handleConnection(ws) {
       rooms.get(currentRoom).set(currentRole, ws);
 
       console.log(`[${currentRoom}] ${currentRole} joined`);
+
+      if (currentRole === 'sender') {
+        const receiveUrl = `https://${serverIP}:${HTTPS_PORT}/receive.html?room=${currentRoom}`;
+        console.log(`[${currentRoom}] Receiver link → ${receiveUrl}`);
+      }
 
       // Notify sender to start negotiation once both peers are present
       const room = rooms.get(currentRoom);
@@ -81,7 +89,7 @@ function getLocalIP() {
 
 async function main() {
   const HTTP_PORT = process.env.PORT || 3000;
-  const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
+  HTTPS_PORT = process.env.HTTPS_PORT || 3443;
 
   // HTTP — for localhost (desktop)
   const httpServer = http.createServer(app);
@@ -95,8 +103,8 @@ async function main() {
   new WebSocketServer({ server: httpsServer }).on('connection', handleConnection);
   await new Promise(r => httpsServer.listen(HTTPS_PORT, r));
 
-  const ip = getLocalIP();
-  const sendUrl = `https://${ip}:${HTTPS_PORT}/send.html`;
+  serverIP = getLocalIP();
+  const sendUrl = `https://${serverIP}:${HTTPS_PORT}/send.html`;
 
   console.log(`\nHTTP  (laptop)     → http://localhost:${HTTP_PORT}/send.html`);
   console.log(`HTTPS (smartphone) → ${sendUrl}`);
