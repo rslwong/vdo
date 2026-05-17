@@ -79,6 +79,7 @@ function handleConnection(ws) {
 }
 
 function getLocalIP() {
+  if (process.env.HOST_IP) return process.env.HOST_IP;
   for (const ifaces of Object.values(os.networkInterfaces())) {
     for (const iface of ifaces) {
       if (iface.family === 'IPv4' && !iface.internal) return iface.address;

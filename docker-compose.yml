@@ -1,0 +1,8 @@
+services:
+  vdo:
+    build: .
+    ports:
+      - "3000:3000"
+      - "3443:3443"
+    environment:
+      - HOST_IP=${HOST_IP:-}
