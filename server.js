@@ -5,6 +5,7 @@ const https = require('https');
 const path = require('path');
 const os = require('os');
 const selfsigned = require('selfsigned');
+const qrcode = require('qrcode-terminal');
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
@@ -95,9 +96,13 @@ async function main() {
   await new Promise(r => httpsServer.listen(HTTPS_PORT, r));
 
   const ip = getLocalIP();
+  const sendUrl = `https://${ip}:${HTTPS_PORT}/send.html`;
+
   console.log(`\nHTTP  (laptop)     → http://localhost:${HTTP_PORT}/send.html`);
-  console.log(`HTTPS (smartphone) → https://${ip}:${HTTPS_PORT}/send.html`);
+  console.log(`HTTPS (smartphone) → ${sendUrl}`);
   console.log(`\n⚠  On your phone: accept the "Not Secure" warning to proceed (self-signed cert)\n`);
+  console.log('Scan to open on your smartphone:\n');
+  qrcode.generate(sendUrl, { small: true });
 }
 
 main();
