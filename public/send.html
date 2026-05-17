@@ -23,9 +23,13 @@
     #copy-btn:hover { background: #1d4ed8; }
     #share-link { word-break: break-all; font-size: 0.8rem; color: #60a5fa; margin-top: 0.5rem; }
     select { background: #111; border: 1px solid #333; color: #fff; padding: 0.4rem 0.6rem; border-radius: 6px; font-size: 0.85rem; width: 100%; }
-    #start-btn { width: 100%; max-width: 720px; padding: 0.75rem; background: #16a34a; color: #fff; font-size: 1rem; font-weight: 700; border-radius: 8px; margin-top: 0.5rem; }
+    #bottom-row { width: 100%; max-width: 720px; display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+    #start-btn { flex: 1; padding: 0.75rem; background: #16a34a; color: #fff; font-size: 1rem; font-weight: 700; border-radius: 8px; }
     #start-btn:hover { background: #15803d; }
     #start-btn:disabled { background: #1a3a1a; color: #555; cursor: not-allowed; }
+    #mute-btn { padding: 0.75rem 1.2rem; background: #222; color: #ccc; font-size: 1rem; font-weight: 700; border-radius: 8px; display: none; }
+    #mute-btn:hover { background: #2a2a2a; }
+    #mute-btn.muted { background: #7f1d1d; color: #fca5a5; }
     #log { font-size: 0.75rem; color: #555; margin-top: 0.5rem; }
   </style>
 </head>
@@ -52,7 +56,10 @@
       <div id="share-link"></div>
     </div>
 
-    <button id="start-btn" onclick="start()">Start Camera &amp; Wait for Receiver</button>
+    <div id="bottom-row">
+      <button id="start-btn" onclick="start()">Start Camera &amp; Wait for Receiver</button>
+      <button id="mute-btn" onclick="toggleMute()">🎙 Mute</button>
+    </div>
   </div>
 
   <div id="log"></div>
@@ -112,6 +119,7 @@
           audio: true
         });
         document.getElementById('local-video').srcObject = localStream;
+        document.getElementById('mute-btn').style.display = 'block';
       } catch (e) {
         log('Camera error: ' + e.message);
         document.getElementById('start-btn').disabled = false;
@@ -186,6 +194,16 @@
       await pc.setLocalDescription(offer);
       ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
       log('Offer sent — waiting for answer…');
+    }
+
+    function toggleMute() {
+      const btn = document.getElementById('mute-btn');
+      const audioTracks = localStream ? localStream.getAudioTracks() : [];
+      if (audioTracks.length === 0) return;
+      const muted = audioTracks[0].enabled;  // currently enabled → about to mute
+      audioTracks.forEach(t => { t.enabled = !muted; });
+      btn.textContent = muted ? '🔇 Unmute' : '🎙 Mute';
+      btn.classList.toggle('muted', muted);
     }
 
     function copyLink() {
