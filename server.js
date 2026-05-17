@@ -94,14 +94,16 @@ async function main() {
 
   // HTTP — for localhost (desktop)
   const httpServer = http.createServer(app);
-  new WebSocketServer({ server: httpServer }).on('connection', handleConnection);
+  const httpWss = new WebSocketServer({ server: httpServer });
+  httpWss.on('connection', handleConnection);
   await new Promise(r => httpServer.listen(HTTP_PORT, r));
 
   // HTTPS — required for camera access on mobile (non-localhost)
   // selfsigned v5 is async
   const pems = await selfsigned.generate([{ name: 'commonName', value: 'localhost' }], { days: 365 });
   const httpsServer = https.createServer({ key: pems.private, cert: pems.cert }, app);
-  new WebSocketServer({ server: httpsServer }).on('connection', handleConnection);
+  const httpsWss = new WebSocketServer({ server: httpsServer });
+  httpsWss.on('connection', handleConnection);
   await new Promise(r => httpsServer.listen(HTTPS_PORT, r));
 
   serverIP = getLocalIP();
@@ -112,6 +114,27 @@ async function main() {
   console.log(`\n⚠  On your phone: accept the "Not Secure" warning to proceed (self-signed cert)\n`);
   console.log('Scan to open on your smartphone:\n');
   qrcode.generate(sendUrl, { small: true });
+
+  function shutdown() {
+    console.log('\nShutting down…');
+    httpWss.close();
+    httpsWss.close();
+    httpServer.close(() => httpsServer.close(() => process.exit(0)));
+  }
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+
+  // Interactive 'q' keypress — only when running in a real terminal
+  if (process.stdin.isTTY) {
+    const readline = require('readline');
+    readline.emitKeypressEvents(process.stdin);
+    process.stdin.setRawMode(true);
+    process.stdin.on('keypress', (str, key) => {
+      if (key.name === 'q' || (key.ctrl && key.name === 'c')) shutdown();
+    });
+    console.log('Press q to quit\n');
+  }
 }
 
 main();
