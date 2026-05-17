@@ -31,6 +31,7 @@
     #mute-btn:hover { background: #2a2a2a; }
     #mute-btn.muted { background: #7f1d1d; color: #fca5a5; }
     #log { font-size: 0.75rem; color: #555; margin-top: 0.5rem; }
+    input[type=range] { width: 100%; accent-color: #2563eb; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -56,6 +57,11 @@
       <div id="share-link"></div>
     </div>
 
+    <div class="card" id="zoom-card" style="display:none">
+      <label>Zoom: <span id="zoom-label">1.0×</span></label>
+      <input type="range" id="zoom-slider" min="1" max="4" step="0.1" value="1" oninput="setZoom(this.value)">
+    </div>
+
     <div id="bottom-row">
       <button id="start-btn" onclick="start()">Start Camera &amp; Wait for Receiver</button>
       <button id="mute-btn" onclick="toggleMute()">🎙 Mute</button>
@@ -76,9 +82,46 @@
     const receiveUrl = `${location.origin}/receive.html?room=${roomId}`;
     document.getElementById('share-link').textContent = receiveUrl;
 
-    let ws, pc, localStream;
+    let ws, pc, localStream, canvasStream, rawVideoEl;
     let remoteDescSet = false;
     let pendingCandidates = [];
+    let zoomLevel = 1;
+
+    const zoomCanvas = document.createElement('canvas');
+    const zoomCtx = zoomCanvas.getContext('2d');
+
+    function setZoom(value) {
+      zoomLevel = parseFloat(value);
+      document.getElementById('zoom-label').textContent = zoomLevel.toFixed(1) + '×';
+    }
+
+    function startCanvasPipeline(rawStream) {
+      zoomCanvas.width = 1280;
+      zoomCanvas.height = 720;
+
+      rawVideoEl = document.createElement('video');
+      rawVideoEl.srcObject = rawStream;
+      rawVideoEl.muted = true;
+      rawVideoEl.playsInline = true;
+      rawVideoEl.play();
+
+      (function drawFrame() {
+        if (rawVideoEl.readyState >= 2) {
+          const vw = rawVideoEl.videoWidth || 1280;
+          const vh = rawVideoEl.videoHeight || 720;
+          const sw = vw / zoomLevel;
+          const sh = vh / zoomLevel;
+          const sx = (vw - sw) / 2;
+          const sy = (vh - sh) / 2;
+          zoomCtx.drawImage(rawVideoEl, sx, sy, sw, sh, 0, 0, zoomCanvas.width, zoomCanvas.height);
+        }
+        requestAnimationFrame(drawFrame);
+      })();
+
+      canvasStream = zoomCanvas.captureStream(30);
+      rawStream.getAudioTracks().forEach(t => canvasStream.addTrack(t));
+      return canvasStream;
+    }
     const statusBadge = document.getElementById('status-badge');
     const logEl = document.getElementById('log');
 
@@ -118,8 +161,10 @@
           video: deviceId ? { deviceId: { exact: deviceId } } : true,
           audio: true
         });
-        document.getElementById('local-video').srcObject = localStream;
+        const streamToSend = startCanvasPipeline(localStream);
+        document.getElementById('local-video').srcObject = streamToSend;
         document.getElementById('mute-btn').style.display = 'block';
+        document.getElementById('zoom-card').style.display = 'block';
       } catch (e) {
         log('Camera error: ' + e.message);
         document.getElementById('start-btn').disabled = false;
@@ -173,7 +218,8 @@
       pendingCandidates = [];
       pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      const streamForRTC = canvasStream || localStream;
+      streamForRTC.getTracks().forEach(track => pc.addTrack(track, streamForRTC));
 
       pc.onicecandidate = ({ candidate }) => {
         if (candidate) {
