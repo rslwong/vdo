@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VDO Share — Receive</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f0f0f; color: #eee; font-family: system-ui, sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 2rem 1rem; }
+    h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 1.5rem; color: #fff; }
+    #video-wrap { position: relative; width: 100%; max-width: 900px; background: #1a1a1a; border-radius: 12px; overflow: hidden; aspect-ratio: 16/9; }
+    video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+    #play-overlay { display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.75); flex-direction: column; align-items: center; justify-content: center; cursor: pointer; gap: 0.5rem; }
+    #play-overlay span { font-size: 3.5rem; }
+    #play-overlay p { font-size: 1rem; color: #ddd; }
+    #status-bar { position: absolute; top: 0; left: 0; right: 0; display: flex; gap: 8px; padding: 10px 12px; }
+    .badge { padding: 3px 9px; border-radius: 20px; font-size: 0.7rem; font-weight: 700; background: #333; color: #888; white-space: nowrap; }
+    .badge.ok { background: #1a3a1a; color: #4ade80; }
+    .badge.warn { background: #3a2a00; color: #fbbf24; }
+    .badge.err { background: #3a1a1a; color: #f87171; }
+    #controls { margin-top: 1.5rem; width: 100%; max-width: 900px; display: flex; flex-direction: column; gap: 1rem; }
+    .card { background: #1a1a1a; border-radius: 10px; padding: 1.2rem; }
+    .card label { display: block; font-size: 0.75rem; color: #888; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .room-row { display: flex; gap: 0.5rem; }
+    #room-input { background: #111; border: 1px solid #333; color: #fff; font-size: 1.1rem; font-family: monospace; padding: 0.5rem 0.75rem; border-radius: 6px; flex: 1; letter-spacing: 0.1em; text-transform: uppercase; }
+    #join-btn { cursor: pointer; border: none; border-radius: 6px; padding: 0.5rem 1.2rem; font-size: 0.9rem; font-weight: 700; background: #2563eb; color: #fff; }
+    #join-btn:hover { background: #1d4ed8; }
+    #join-btn:disabled { background: #1a2a4a; color: #555; cursor: not-allowed; }
+    #fullscreen-btn { cursor: pointer; border: none; background: #222; color: #ccc; border-radius: 6px; padding: 0.5rem 1rem; font-size: 0.85rem; }
+    #debug-panel { background: #111; border-radius: 10px; padding: 1rem; font-family: monospace; font-size: 0.72rem; line-height: 1.6; }
+    #debug-panel .line { color: #666; }
+    #debug-panel .line.info { color: #60a5fa; }
+    #debug-panel .line.ok { color: #4ade80; }
+    #debug-panel .line.warn { color: #fbbf24; }
+    #debug-panel .line.err { color: #f87171; }
+    #debug-title { display: flex; justify-content: space-between; margin-bottom: 0.5rem; }
+    #debug-title span { font-size: 0.7rem; color: #555; text-transform: uppercase; letter-spacing: 0.05em; }
+  </style>
+</head>
+<body>
+  <h1>🖥️ Camera Receiver</h1>
+
+  <div id="video-wrap">
+    <video id="remote-video" autoplay playsinline muted></video>
+    <div id="play-overlay" onclick="forcePlay()">
+      <span>▶</span>
+      <p>Click to play</p>
+    </div>
+    <div id="status-bar">
+      <div class="badge" id="badge-sig">Signaling: idle</div>
+      <div class="badge" id="badge-ice">ICE: –</div>
+      <div class="badge" id="badge-conn">Conn: –</div>
+      <div class="badge" id="badge-track">Track: –</div>
+    </div>
+  </div>
+
+  <div id="controls">
+    <div class="card">
+      <label>Room Code</label>
+      <div class="room-row">
+        <input id="room-input" placeholder="Enter room code" maxlength="6" />
+        <button id="join-btn" onclick="join()">Join</button>
+        <button id="fullscreen-btn" onclick="goFullscreen()">⛶ Fullscreen</button>
+      </div>
+    </div>
+
+    <div class="card" id="debug-panel">
+      <div id="debug-title">
+        <span>Debug log</span>
+        <span id="stats-line"></span>
+      </div>
+      <div id="debug-lines"></div>
+    </div>
+  </div>
+
+  <script>
+    const ICE_SERVERS = [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun.services.mozilla.com' },
+    ];
+
+    const params = new URLSearchParams(location.search);
+    if (params.has('room')) {
+      document.getElementById('room-input').value = params.get('room').toUpperCase();
+    }
+
+    let ws, pc;
+    let remoteDescSet = false;
+    let pendingCandidates = [];
+
+    const logLines = [];
+    function log(msg, level = 'info') {
+      const ts = new Date().toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      logLines.push({ ts, msg, level });
+      if (logLines.length > 15) logLines.shift();
+      document.getElementById('debug-lines').innerHTML =
+        logLines.map(l => `<div class="line ${l.level}">[${l.ts}] ${l.msg}</div>`).join('');
+      console.log(`[${level}] ${msg}`);
+    }
+
+    function setBadge(id, text, cls) {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      el.className = 'badge' + (cls ? ' ' + cls : '');
+    }
+
+    function join() {
+      const roomId = document.getElementById('room-input').value.trim().toUpperCase();
+      if (!roomId) { log('Enter a room code first', 'warn'); return; }
+
+      document.getElementById('join-btn').disabled = true;
+      document.getElementById('room-input').disabled = true;
+
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}`);
+      log(`Connecting to ${proto}://${location.host}`);
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'join', room: roomId, role: 'receiver' }));
+        setBadge('badge-sig', 'Signaling: joined', 'ok');
+        log('Joined room ' + roomId + ' — waiting for sender');
+      };
+
+      ws.onerror = (e) => {
+        setBadge('badge-sig', 'Signaling: error', 'err');
+        log('WebSocket error — check URL/cert', 'err');
+      };
+
+      ws.onclose = (e) => {
+        setBadge('badge-sig', 'Signaling: closed', 'err');
+        log('WebSocket closed (code ' + e.code + ')', 'warn');
+        document.getElementById('join-btn').disabled = false;
+        document.getElementById('room-input').disabled = false;
+      };
+
+      ws.onmessage = async ({ data }) => {
+        const msg = JSON.parse(data);
+
+        if (msg.type === 'offer') {
+          log('Offer received');
+          await handleOffer(msg.sdp);
+        } else if (msg.type === 'ice-candidate') {
+          if (remoteDescSet) {
+            try { await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)); }
+            catch (e) { log('addIceCandidate error: ' + e.message, 'warn'); }
+          } else {
+            pendingCandidates.push(msg.candidate);
+          }
+        } else if (msg.type === 'peer-disconnected') {
+          setBadge('badge-sig', 'Sender left', 'warn');
+          log('Sender disconnected', 'warn');
+        }
+      };
+    }
+
+    async function handleOffer(sdp) {
+      remoteDescSet = false;
+      pendingCandidates = [];
+      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+      pc.ontrack = (event) => {
+        log('ontrack fired — kind: ' + event.track.kind + ', streams: ' + event.streams.length, 'ok');
+        setBadge('badge-track', 'Track: ' + event.track.kind, 'ok');
+        const video = document.getElementById('remote-video');
+        if (event.streams && event.streams[0]) {
+          video.srcObject = event.streams[0];
+        } else {
+          if (!video.srcObject) video.srcObject = new MediaStream();
+          video.srcObject.addTrack(event.track);
+        }
+        // Unmute now that we have a stream (was muted to allow autoplay)
+        video.muted = false;
+        video.play().catch(e => {
+          log('Autoplay blocked: ' + e.message + ' — click ▶ to play', 'warn');
+          document.getElementById('play-overlay').style.display = 'flex';
+        });
+      };
+
+      pc.onicecandidate = ({ candidate }) => {
+        if (candidate) {
+          ws.send(JSON.stringify({ type: 'ice-candidate', candidate }));
+          log('ICE candidate sent: ' + (candidate.type || candidate.candidate.split(' ')[7]));
+        } else {
+          log('ICE gathering complete');
+        }
+      };
+
+      pc.onicecandidateerror = (e) => {
+        log('ICE candidate error: ' + e.errorText + ' (url: ' + e.url + ')', 'warn');
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        const s = pc.iceConnectionState;
+        log('ICE connection: ' + s, s === 'connected' || s === 'completed' ? 'ok' : s === 'failed' ? 'err' : 'info');
+        setBadge('badge-ice', 'ICE: ' + s, s === 'connected' || s === 'completed' ? 'ok' : s === 'failed' ? 'err' : 'warn');
+      };
+
+      pc.onconnectionstatechange = () => {
+        const s = pc.connectionState;
+        log('Connection: ' + s, s === 'connected' ? 'ok' : s === 'failed' ? 'err' : 'info');
+        setBadge('badge-conn', 'Conn: ' + s, s === 'connected' ? 'ok' : s === 'failed' ? 'err' : 'warn');
+        if (s === 'connected') startStats();
+      };
+
+      log('Setting remote description…');
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      remoteDescSet = true;
+      log('Remote desc set — draining ' + pendingCandidates.length + ' queued candidates');
+
+      for (const c of pendingCandidates) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
+      }
+      pendingCandidates = [];
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
+      log('Answer sent');
+    }
+
+    function forcePlay() {
+      const video = document.getElementById('remote-video');
+      video.muted = false;
+      video.play().then(() => {
+        document.getElementById('play-overlay').style.display = 'none';
+        log('Playback started via user gesture', 'ok');
+      }).catch(e => log('Play still failed: ' + e.message, 'err'));
+    }
+
+    function startStats() {
+      if (!pc) return;
+      setTimeout(async () => {
+        if (!pc) return;
+        const stats = await pc.getStats();
+        let info = [];
+        stats.forEach(s => {
+          if (s.type === 'inbound-rtp') {
+            info.push(`${s.kind}: ${s.bytesReceived}B rx, ${s.packetsLost} lost`);
+          }
+        });
+        const line = info.length ? info.join(' | ') : 'no inbound-rtp stats';
+        document.getElementById('stats-line').textContent = line;
+        log('Stats @ 3s: ' + line, info.length && info[0].includes('0B') ? 'warn' : 'ok');
+      }, 3000);
+    }
+
+    function goFullscreen() {
+      const wrap = document.getElementById('video-wrap');
+      if (wrap.requestFullscreen) wrap.requestFullscreen();
+      else if (wrap.webkitRequestFullscreen) wrap.webkitRequestFullscreen();
+    }
+
+    if (params.has('room')) {
+      window.addEventListener('load', join);
+    }
+  </script>
+</body>
+</html>
