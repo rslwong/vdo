@@ -76,7 +76,7 @@
       { urls: 'stun:stun1.l.google.com:19302' }
     ];
 
-    const roomId = Math.random().toString(36).slice(2, 8).toUpperCase();
+    const roomId = String(Math.floor(Math.random() * 900) + 100);
     document.getElementById('room-code').value = roomId;
 
     const receiveUrl = `${location.origin}/receive.html?room=${roomId}`;
@@ -96,9 +96,6 @@
     }
 
     function startCanvasPipeline(rawStream) {
-      zoomCanvas.width = 1280;
-      zoomCanvas.height = 720;
-
       rawVideoEl = document.createElement('video');
       rawVideoEl.srcObject = rawStream;
       rawVideoEl.muted = true;
@@ -107,13 +104,17 @@
 
       (function drawFrame() {
         if (rawVideoEl.readyState >= 2) {
-          const vw = rawVideoEl.videoWidth || 1280;
-          const vh = rawVideoEl.videoHeight || 720;
+          const vw = rawVideoEl.videoWidth;
+          const vh = rawVideoEl.videoHeight;
+          if (zoomCanvas.width !== vw || zoomCanvas.height !== vh) {
+            zoomCanvas.width = vw;
+            zoomCanvas.height = vh;
+          }
           const sw = vw / zoomLevel;
           const sh = vh / zoomLevel;
           const sx = (vw - sw) / 2;
           const sy = (vh - sh) / 2;
-          zoomCtx.drawImage(rawVideoEl, sx, sy, sw, sh, 0, 0, zoomCanvas.width, zoomCanvas.height);
+          zoomCtx.drawImage(rawVideoEl, sx, sy, sw, sh, 0, 0, vw, vh);
         }
         requestAnimationFrame(drawFrame);
       })();
